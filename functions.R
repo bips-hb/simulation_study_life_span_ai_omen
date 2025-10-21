@@ -9,6 +9,7 @@
 #   - Lab measurements
 #   - Binary cancer outcome (1 = cancer, 0 = no cancer)
 
+source("helpers.R")
 
 
 ## Baseline variables ####
@@ -82,3 +83,108 @@ simulate_visits <- function(baseline, mean_visits_per_year = 2, followup_years =
   
 }
 
+
+## Generate sparse high-dimensional ICD/ATC features at visit-level ####
+
+# ICD and ATC codes are represented as binary indicators per visit (or counts)
+simulate_codes_at_visits <- function(visits_dt, n_icd = 200, n_atc = 100,
+                                     icd_shape = 1.2, atc_shape = 1.1,
+                                     avg_codes_per_visit = 3, seed = NULL) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  m <- nrow(visits_dt)
+  icd_probs <- sample_code_probs(n_icd, shape = icd_shape)
+  atc_probs <- sample_code_probs(n_atc, shape = atc_shape)
+  
+  
+  # Now for each visit sample number of ICDs and ATCs and then sample codes
+  icd_ind <- Matrix(0, nrow = m, ncol = n_icd, sparse = TRUE)
+  atc_ind <- Matrix(0, nrow = m, ncol = n_atc, sparse = TRUE)
+  row <- 1
+  
+  for (r in seq_len(m)) {
+    
+    # poisson number of codes with mean avg_codes_per_visit (can be 0)
+    k_icd <- rpois(1, lambda = avg_codes_per_visit)
+    k_atc <- rpois(1, lambda = avg_codes_per_visit/2)
+    
+    if (k_icd > 0) {
+      
+      codes <- sample.int(n_icd, size = min(k_icd, n_icd), prob = icd_probs)
+      icd_ind[row, unique(codes)] <- 1
+      
+    }
+    
+    if (k_atc > 0) {
+      codes2 <- sample.int(n_atc, size = min(k_atc, n_atc), prob = atc_probs)
+      atc_ind[row, unique(codes2)] <- 1
+      
+    }
+    
+    row <- row + 1
+    
+  }
+  
+  colnames(icd_ind) <- paste0("ICD", sprintf("%03d", seq_len(n_icd)))
+  colnames(atc_ind) <- paste0("ATC", sprintf("%03d", seq_len(n_atc)))
+  list(icd = icd_ind, atc = atc_ind)
+  
+}
+
+
+
+
+## Aggregate visit-level codes to patient-level features ####
+aggr_codes_to_patient <- function(visits_dt, code_mats, agg_fun = c("sum","any")) {
+  agg_fun <- match.arg(agg_fun)
+  # attach patient ids to rows
+  rows_patient <- visits_dt$patient_id
+  icd <- code_mats$icd
+  atc <- code_mats$atc
+  # Use sparse aggregation
+  patients <- unique(rows_patient)
+  n_pat <- length(patients)
+  # create mapping from visit rows to patient index
+  pat_idx <- match(rows_patient, patients)
+  # aggregate by patient via matrix multiplication with sparse indicator
+  M <- sparseMatrix(i = seq_along(pat_idx), j = pat_idx, x = 1, dims = c(length(pat_idx), n_pat))
+  if (agg_fun == "sum") {
+    icd_patient <- t(icd) %*% M
+    atc_patient <- t(atc) %*% M
+    icd_patient <- t(icd_patient)
+    atc_patient <- t(atc_patient)
+    rownames(icd_patient) <- paste0("patient_", patients)
+    rownames(atc_patient) <- paste0("patient_", patients)
+  } else {
+    # any: convert to logical presence
+    icd_patient <- Matrix(0, nrow = n_pat, ncol = ncol(icd), sparse = TRUE)
+    atc_patient <- Matrix(0, nrow = n_pat, ncol = ncol(atc), sparse = TRUE)
+    for (i in seq_len(n_pat)) {
+      vis_rows <- which(pat_idx == i)
+      if (length(vis_rows) > 0) {
+        icd_patient[i, ] <- as.integer(colSums(icd[vis_rows, , drop = FALSE]) > 0)
+        atc_patient[i, ] <- as.integer(colSums(atc[vis_rows, , drop = FALSE]) > 0)
+      }
+    }
+    rownames(icd_patient) <- paste0("patient_", patients)
+    rownames(atc_patient) <- paste0("patient_", patients)
+  }
+  list(icd_patient = icd_patient, atc_patient = atc_patient, patient_id = patients)
+}
+
+
+
+## Simulate laboratory continuous values (time-varying) ####
+simulate_labs <- function(visits_dt, labs = c("hb","crp"), seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  m <- nrow(visits_dt)
+  lab_mat <- matrix(NA, nrow = m, ncol = length(labs))
+  colnames(lab_mat) <- labs
+  for (i in seq_len(m)) {
+    # baseline variation by age and sex could be added; here simple random
+    lab_mat[i, "hb"] <- rnorm(1, mean = 13 - (visits_dt$age_at_visit[i] - 60)/100, sd = 1.2)
+    lab_mat[i, "crp"] <- abs(rnorm(1, mean = 2 + (visits_dt$age_at_visit[i] - 60)/40, sd = 1.5))
+  }
+  lab_dt <- as.data.table(lab_mat)
+  cbind(visits_dt, lab_dt)
+}

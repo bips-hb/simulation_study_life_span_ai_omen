@@ -26,3 +26,18 @@ summary(data_baseline$age)
 data_visits <- simulate_visits(baseline = data_baseline, seed = 26)
 
 
+## Simulate ICD and ATC codes ####
+data_ics_atc_codes <- simulate_codes_at_visits(data_visits, seed = 26)
+
+
+## Aggregate visit-level codes to patient-level features ####
+data_aggr <- aggr_codes_to_patient(data_visits, data_ics_atc_codes, agg_fun = "any")
+
+
+## Simulate laboratory continuous values (time-varying) ####
+data_labs <- simulate_labs(data_visits, seed = 26)
+
+
+## Generate binary cancer outcome at patient-level ####
+
+
