@@ -1,49 +1,4 @@
 
-
-set.seed(123)
-
-# Set parameters 
-n_patients <- 100 
-n_timepoints <- 10 
-n_icd <- 10 
-n_atc <- 10 
-n_features <- n_icd + n_atc + 5 # age + sex + 3 SES dummies 
-
-# Simulate static features 
-age <- round(runif(n_patients, 18, 90)) 
-sex <- rbinom(n_patients, 1, 0.5) 
-ses <- sample(c("low", "mid", "high"), n_patients, replace = TRUE, prob = c(0.3, 0.5, 0.2)) 
-
-# One-hot encode SES 
-ses_dummy <- model.matrix(~ ses - 1) # columns: seshigh, seslow, sesmid 
-
-# Simulate time-dependent features (ICD + ATC codes) 
-x_array <- array(0, dim = c(n_patients, n_timepoints, n_features)) 
-
-for (i in 1:n_patients) { 
-  for (t in 1:n_timepoints) { 
-  icd <- rbinom(n_icd, 1, 0.1) 
-  atc <- rbinom(n_atc, 1, 0.1) 
-  
-  # Combine features: age, sex, SES dummies, ICDs, ATCs 
-  x_array[i, t, ] <- c(age[i], sex[i], ses_dummy[i, ], icd, atc) 
-  } 
-} 
-
-# Assign SES coefficients (matching order of SES dummies) 
-ses_coefs <- c(ses_dummy = c(0.3, -0.2, 0.1)) # e.g., seshigh=0.3, seslow=-0.2, sesmid=0.1 
-
-# Simulate binary outcome 
-linear_pred <- 0.03*age + 0.4*sex + x_array[, n_timepoints, 3:5] %*% ses_coefs + 0.2*apply(x_array[, n_timepoints, 6:n_features], 1, sum) 
-prob <- 1 / (1 + exp(-linear_pred)) 
-y <- rbinom(n_patients, 1, prob)
-
-
-x_array[1,,]
-
-
-
-
 # Realistic (hopefully lol) Longitudinal Health Insurance Data Simulation ####
 
 # Structure of sequence data:
@@ -59,10 +14,10 @@ library(keras3)
 set.seed(123)
 
 ## PARAMETERS ####
-n_patients <- 100
-n_timepoints <- 10
-n_icd <- 10
-n_atc <- 10
+n_patients <- 1000
+n_timepoints <- 20
+n_icd <- 20
+n_atc <- 20
 n_features <- n_icd + n_atc + 5  # age + sex + 3 SES dummies
 
 
@@ -73,76 +28,122 @@ ses <- sample(c("low", "mid", "high"), n_patients, replace = TRUE, prob = c(0.3,
 ses_dummy <- model.matrix(~ ses - 1)  # dummy-encoded columns: seshigh, seslow, sesmid
 
 
+## CHRONIC PATIENTS ####
+prop_chronic <- 0.30   # fraction of patients with chronic disease behavior
+is_chronic <- rbinom(n_patients, 1, prop_chronic)  # 1 = chronic patient
+table(is_chronic)
+
+
+## DICD/ATC TYPES ####
+# First few ICDs and ATCs are chronic-prone
+chronic_icd_idx <- 1:6    # ICD codes that are likely chronic
+acute_icd_idx   <- 7:n_icd
+chronic_atc_idx <- 1:6
+acute_atc_idx   <- 7:n_atc
+
+
+## Stop probabilities (per-step) depending on chronic vs acute and patient chronic flag
+# ICD stop prob: chronic ICDs low stop prob if patient is chronic, otherwise higher
+icd_stop_prob_chronic_patient <- 0.02  # chronic patients rarely resolve chronic ICD
+icd_stop_prob_nonchronic_patient <- 0.2
+icd_stop_prob_acute <- 0.4  # acute ICDs likely to resolve
+
+# ATC stop probs
+atc_stop_prob_chronic <- 0.02
+atc_stop_prob_acute <- 0.4
+
+
 ## ARRAYS (3D) ####
 x_array <- array(0, dim = c(n_patients, n_timepoints, n_features))
 
 
 ## LONGITUDINAL ICD + ATC CODES ####
-for (i in 1:n_patients) {
+
+for(i in 1:n_patients){
   
-  # Baseline persistence and probabilities depend on age/sex
-  icd_prev <- rbinom(n_icd, 1, plogis(-3 + 0.03*(age[i]-50) + 0.3*sex[i]))
-  atc_prev <- rbinom(n_atc, 1, plogis(-3 + 0.02*(age[i]-50) + 0.2*sex[i]))
-  # -> baseline intercept of -3 gives a low base probability
-  # -> age effect pf 0.03 means that each year above 50 increases the log-odds by 0.03
-  # -> sex effect of 0.3, so male have a slightly higher risk
-  
-  for (t in 1:n_timepoints) {
+  # baseline prev for ICD and ATC depends on chronic status
+  if(is_chronic[i]==1){
     
-    # Probability of new diagnoses increases slightly over time
-    new_icd <- rbinom(n_icd, 1, plogis(-4 + 0.04*(age[i]-50) + 0.3*sex[i] + 0.1*t))
-    # -> base log-odds of -4, very low prob. at the start
-    # -> the older the higher the odds
-    # -> males have higher odds
-    # -> slightly higher risk over time (diseases accumulate)
+    # chronic patients: higher baseline for chronic-prone ICDs
+    icd_prev <- rep(0, n_icd)
+    icd_prev[chronic_icd_idx] <- rbinom(length(chronic_icd_idx), 1,
+                                        plogis(-3.5 + 0.03*(age[i]-50) + 0.15*sex[i]))
+    icd_prev[acute_icd_idx] <- rbinom(length(acute_icd_idx), 1,
+                                      plogis(-4 + 0.03*(age[i]-50) + 0.15*sex[i]))
     
-    # Chronic persistence: once you have a diagnosis, you tend to keep it
-    icd <- pmax(icd_prev, new_icd)
-    icd_prev <- icd
+    atc_prev <- rbinom(n_atc, 1, plogis(-4 + 0.4 + 0.02*(age[i]-50) + 0.15*sex[i]))
     
-    # Medications depend on ICDs and also persist
-    new_atc <- rbinom(n_atc, 1, plogis(-4 + 0.3*icd + 0.1*t))
-    # -> each ATC code has a higher probability if the related ICD is present
-    # -> so if an ICD is active, medication probability increases
+  } else {
     
-    atc <- pmax(atc_prev, new_atc)
-    atc_prev <- atc
-    # -> medications often continue for multiple timepoints once prescribed
-    # -> take element-wise maximum
-    
-    x_array[i, t, ] <- c(age[i], sex[i], ses_dummy[i, ], icd, atc)
+    icd_prev <- rbinom(n_icd, 1, plogis(-4 + 0.03*(age[i]-50) + 0.15*sex[i]))
+    atc_prev <- rbinom(n_atc, 1, plogis(-4 + 0.02*(age[i]-50) + 0.1*sex[i]))
     
   }
   
+  for(t in 1:n_timepoints){
+    
+    # new ICDs (risk increases with time)
+    new_icd <- rbinom(n_icd, 1,
+                      plogis(-4 + 0.03*(age[i]-50) + 0.15*sex[i] + 0.08*t))
+    
+    # compute stop probabilities per ICD based on type and patient chronicness
+    icd_stop_probs <- rep(NA, n_icd)
+    icd_stop_probs[chronic_icd_idx] <- ifelse(is_chronic[i]==1,
+                                              icd_stop_prob_chronic_patient,
+                                              icd_stop_prob_nonchronic_patient)
+    icd_stop_probs[acute_icd_idx] <- icd_stop_prob_acute
+    icd_stop_probs <- pmin(pmax(icd_stop_probs * icd_stop_factor, 0.01), 0.99)
+    
+    # some existing ICDs can resolve with their stop probability
+    icd_resolve <- ifelse(icd_prev == 1 & runif(n_icd) < icd_stop_probs, 1, 0)
+    # combine persistence, new, and resolution
+    icd <- ifelse(icd_resolve==1, 0, pmax(icd_prev, new_icd))
+    icd_prev <- icd
+    
+    # ATC start prob increases if corresponding ICD present (map ICD->ATC crudely 1-to-1)
+    # and chronic patients have lower stop probabilities for chronic ATCs
+    atc_start_prob <- plogis(atc_base_logit + 0.25 * icd[1:n_atc])  # boost when ICD present
+    # ensure some baseline variability
+    new_atc <- rbinom(n_atc, 1, atc_start_prob)
+    
+    # ATC stop probs
+    atc_stop_probs <- rep(NA, n_atc)
+    atc_stop_probs[chronic_atc_idx] <- atc_stop_prob_chronic
+    atc_stop_probs[acute_atc_idx] <- atc_stop_prob_acute
+    # if patient is chronic, reduce stop prob for chronic ATCs
+    atc_stop_probs[chronic_atc_idx] <- atc_stop_probs[chronic_atc_idx] * ifelse(is_chronic[i]==1, 0.3, 1)
+    atc_stop_probs <- pmin(pmax(atc_stop_probs * atc_stop_factor, 0.01), 0.99)
+    
+    # Some ATCs stop
+    atc_stopped <- ifelse(atc_prev == 1 & runif(n_atc) < atc_stop_probs, 1, 0)
+    atc <- pmax(new_atc, atc_prev * (1 - atc_stopped))  # start or persist unless stopped
+    atc_prev <- atc
+    
+    # Save features: age, sex, ses dummies, ICDs, ATCs
+    x_array[i, t, ] <- c(age[i], sex[i], ses_dummy[i, ], icd, atc)
+  }
 }
 
-## RARE EVENTS (e.g., rare ICD strongly linked to cancer) ####
+## Rare ICD and outcome
 rare_icd <- rbinom(n_patients, 1, 0.03)
-rare_effect <- 2  # strong impact
-
-## OUTCOME: CANCER ####
-# Outcome depends on demographics + cumulative ICD/ATC exposure + rare event
-cum_exposure <- apply(x_array[, , 6:n_features], c(1,3), sum)   # sum over time
-total_exposure <- apply(cum_exposure, 1, sum)
-
-# SES effects (example coefficients)
+rare_effect <- 2
+total_exposure <- apply(x_array[, , 6:n_features], 1, sum)
 ses_coefs <- c(0.3, -0.2, 0.1)
 
-linear_pred <- 0.03*age + 0.4*sex +
-  as.vector(ses_dummy %*% ses_coefs) +
-  0.05*total_exposure +
-  rare_effect*rare_icd
-
-prob <- 1 / (1 + exp(-linear_pred))
+prob <- plogis(-5 + 0.02*age + 0.25*sex + as.vector(ses_dummy %*% ses_coefs) +
+                 0.05 * total_exposure + rare_effect * rare_icd)
 y <- rbinom(n_patients, 1, prob)
 
-x_array
+## Quick checks
+cat("Chronic fraction:", mean(is_chronic), "\n")
+table(is_chronic)
+summary(prob)
+table(y)
 
-
-dim(x_array) # n_patients × n_timepoints × n_features
-length(y) # n_patients
-
-
+# Inspect a few patient trajectories
+# patient 1: show ICDs over time
+print(x_array[1, , 6:(5+n_icd)])  # ICD1..ICD10 for patient 1 over time
+print(x_array[1, , (6+n_icd):n_features]) # ATC1..ATC10 for patient 1 over time
 
 
 

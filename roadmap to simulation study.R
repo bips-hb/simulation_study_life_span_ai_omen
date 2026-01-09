@@ -1,5 +1,5 @@
 #...............................................................................
-# Big-picture ............................................................. ####
+# Big-picture ..................................................................
 #...............................................................................
 
 # 1. Simulate simple, controlled data
@@ -24,8 +24,9 @@
 #    -> predictive performance, explanation quality, ...
 
 
-
-## Load packages ####
+#...............................................................................
+# Load packages ####
+#...............................................................................
 
 library(reticulate)
 library(keras3)   
@@ -36,30 +37,21 @@ library(ggplot2)
 library(reshape2)
 
 
-
-
-## Data Simulation ####
-
-### Toy (Level 0) - Minimal temporal structure ####
-
-# - Binary ICD/ATC that appear randomly per timepoint (no persistence)
-# - Outcome depends only on a small subset of features (e.g. ICD1 & ATC1) in a 
-#   known linear way.
-
-tf <- import("tensorflow", delay_load = TRUE)
-
 # Set seed
 set.seed(3105)
 
-# Set parameters
+#...............................................................................
 # PARAMETERS ####
-n_patients <- 100
+#...............................................................................
+n_patients <- 1000
 n_timepoints <- 10
 n_icd <- 10
-n_atc <- 10
+n_atc <- 15
 
 
+#...............................................................................
 # STATIC FEATURES ####
+#...............................................................................
 age <- round(runif(n_patients, 18, 90))
 sex <- rbinom(n_patients, 1, 0.5)
 ses <- sample(c("low", "mid", "high"), 
@@ -69,17 +61,33 @@ ses <- sample(c("low", "mid", "high"),
 ses_dummy <- model.matrix(~ ses - 1)
 
 
+#...............................................................................
 # CHRONICITY DESIGN ####
+#...............................................................................
 
 # 25% of patients are chronically ill
 chronic_flag <- rbinom(n_patients, 1, 0.25) 
 
-# Define ICD and ATC codes that are "typically chronic"
-icd_chronic <- c(rep(1, 4), rep(0, n_icd - 4))   # first 4 ICDs chronic
-atc_chronic <- c(rep(1, 4), rep(0, n_atc - 4))   # first 4 ATCs chronic
+
+# Certain ICD / ATC codes are "typically chronic" and
+# tend to persist once they appear.
+n_icd_chronic <- ceiling(0.1 * n_icd)
+n_atc_chronic <- ceiling(0.15 * n_atc)
+
+icd_chronic <- c(
+  rep(1, n_icd_chronic),           # chronic ICD codes
+  rep(0, n_icd - n_icd_chronic)
+)
+
+atc_chronic <- c(
+  rep(1, n_atc_chronic),           # chronic ATC codes
+  rep(0, n_atc - n_atc_chronic)
+)
 
 
+#...............................................................................
 # WIDE DATAFRAME INIT ####
+#...............................................................................
 wide <- data.frame(
   patient_id = 1:n_patients,
   age = age,
@@ -90,21 +98,23 @@ wide <- data.frame(
 )
 
 
+#...............................................................................
 # SIMULATE ICDs (wide) ####
+#...............................................................................
 
 # Simulate each ICD code across time, with per-patient persistence/resolution
 for (j in 1:n_icd) {
   
   # Baseline prevalence (per patient)
   # -> chronic patients have a slightly higher baseline
-  prev <- rbinom(n_patients, 1, 0.08 + 0.05 * chronic_flag)  
+  prev <- rbinom(n_patients, 1, 0.02 + 0.03 * chronic_flag)  
   
   for (t in 1:n_timepoints) {
     
     #........................ New diagnosis probability ........................
     
     # Chronic patients are more likely to get any ICD code
-    new_prob <- plogis(-4 + 0.03*(age - 50) + 0.25*sex + 0.12*t + 0.9*chronic_flag)
+    new_prob <- plogis(-5 + 0.02*(age - 50) + 0.2*sex + 0.1*t + 0.8*chronic_flag)
     
     # Make chronic ICD codes more common by themselves
     new_prob <- new_prob * (0.6 + 0.8 * icd_chronic[j])
@@ -133,243 +143,355 @@ for (j in 1:n_icd) {
 }
 
 
+#...............................................................................
 # SIMULATE ATCs (wide) ####
+#...............................................................................
 
-# ATCs depend on ICD burden per timepoint, have courses and different persistence for chronic vs acute ATCs
 for (k in 1:n_atc) {
   
   # Baseline probability of being on the medication
-  prev <- rbinom(n_patients, 1, 0.03 + 0.03 * chronic_flag)
+  prev <- rbinom(n_patients, 1, 0.02 + 0.02 * chronic_flag)
+  related_icds <- sample(1:n_icd,2) # each ATC depends on 2 ICDs
   
-  for (t in 1:n_timepoints) {
+  for(t in 1:n_timepoints){
+    icd_cols_t <- paste0("ICD",related_icds,"_t",t)
+    icd_effect <- rowSums(wide[, icd_cols_t, drop=FALSE])
     
-    #............... ICD occurrence at this time t (across all ICDs) ...........
+    start_prob <- plogis(-5 + 0.4*icd_effect + 0.3*chronic_flag + 0.3*atc_chronic[k])
+    start_prob <- pmin(start_prob,0.99)
+    new_presc <- rbinom(n_patients,1,start_prob)
     
-    # Pick all ICD columns at the current timepoint
-    icd_cols_t <- grep(paste0("_t", t, "$"), names(wide), value = TRUE)[1:n_icd] 
+    stop_prob <- ifelse(atc_chronic[k]==1,0.02,0.35)
+    still_on <- as.integer(prev==1 & runif(n_patients)>=stop_prob)
+    current <- pmax(new_presc, still_on)
     
-    # Sum ICDs (0/1) for each patient at current timepoint
-    icd_occurrence <- rowSums(wide[, icd_cols_t, drop = FALSE])
-    
-    
-    #............................. New ATC probability .........................
-    
-    # Start probability: base + ICD effect + chronic patient effect)
-    # plogis(-4) = 0.018 -> 1.8% baseline prob. pf starting the ATC if patient 
-    #                       has no diagnoses and is not chronic
-    start_prob <- plogis(-4 + 0.25 * icd_occurrence + 0.4 * chronic_flag)
-    
-    # Boost for chronic ATCs
-    start_prob <- start_prob + 0.3 * atc_chronic[k]
-    start_prob <- pmin(start_prob, 0.99)
-    
-    # Sample new prescriptions
-    new_presc <- rbinom(n_patients, 1, start_prob)
-    
-    
-    #................................. Persistence .............................
-    
-    # Persistence: patients already on med may continue
-    
-    # Chronic ATCs are less likely to stop
-    stop_prob <- ifelse(atc_chronic[k] == 1, 0.02, 0.35)
-    still_on <- as.integer(prev == 1 & runif(n_patients) >= stop_prob)
-    
-    # Current status: new OR continued
-    current_atc <- pmax(new_presc, still_on)
-    
-    # .............................. Save and update ...........................
-    
-    wide[[paste0("ATC", k, "_t", t)]] <- current_atc
-    prev <- current_atc
-    
+    wide[[paste0("ATC",k,"_t",t)]] <- current
+    prev <- current
   }
 }
 
 
-
+#...............................................................................
 # OUTCOME  ####
-# Outcome depends on demographics, SES, chronic_flag and recent + total exposure
+#...............................................................................
+# Outcome depends on time-weighted ICD & ATC exposures
 
-#................................. Total exposure ..............................
+icd_cols_all <- grep("^ICD", names(wide), value=TRUE)
+atc_cols_all <- grep("^ATC", names(wide), value=TRUE)
 
-# Columns with ICD codes
-icd_cols_all  <- grep("^ICD", names(wide), value = TRUE)
+time_weights <- seq(0.5,1.5,length.out = n_timepoints)
 
-# Columns with ATC codes
-atc_cols_all  <- grep("^ATC", names(wide), value = TRUE)
+time_weighted_icd <- rowSums(as.matrix(wide[, icd_cols_all]) * rep(time_weights, each=n_patients))
+time_weighted_atc <- rowSums(as.matrix(wide[, atc_cols_all]) * rep(time_weights, each=n_patients))
 
-# Count total occurrence of ICD and ATC codes per patient
-total_exposure <- rowSums(wide[, c(icd_cols_all, atc_cols_all)])
+ses_effect <- as.vector(ses_dummy %*% c(0.3,-0.2,0.1))
 
-
-
-#............................ Socioeconomic status .............................
-
-ses_coefs <- c(0.3, -0.2, 0.1)
-ses_effect <- as.vector(ses_dummy %*% ses_coefs)
-
-
-#..................................... Outcome .................................
-
-linear_pred <- -5 + 0.02 * age + 0.3 * sex + 0.8 * chronic_flag +
-  0.02 * total_exposure + ses_effect
+linear_pred <- -2 + 0.02*age + 0.3*sex + 0.8*chronic_flag +
+  2*time_weighted_icd + 2.5*time_weighted_atc + ses_effect
 prob <- plogis(linear_pred)
-y <- rbinom(n_patients, 1, prob)
-
-wide$outcome <- y
-wide$prob <- prob
+wide$outcome <- rbinom(n_patients,1,prob)
 
 
 
-## Convert into 3D array (patients, timesteps, features) ####
+
+
+
+#...............................................................................
+# Convert from wide format into 3D array (patients, timesteps, features) ####
+#...............................................................................
+
 make_rnn_array_from_wide <- function(df, n_timepoints, n_icd, n_atc) {
   
-  n_patients <- nrow(df)
+  # static matrix for SES
+  static_mat   <- model.matrix(~ df$ses - 1)
   
-  # static features: age, sex, ses dummies
-  static_mat <- model.matrix(~ df$ses - 1)
-  static_names <- c("age","sex", colnames(static_mat))
-  n_static <- length(static_names)
-  n_features <- n_static + n_icd + n_atc
+  # static features: age, sex, chronic_flag + SES dummies
+  static_names <- c("age", "sex", "chronic_flag", colnames(static_mat))
+  n_static     <- length(static_names)
+  
+  n_features   <- n_static + n_icd + n_atc
+  n_patients   <- nrow(df)
+  
+  # initialize array
   arr <- array(0, dim = c(n_patients, n_timepoints, n_features))
   
   for (i in 1:n_patients) {
     for (t in 1:n_timepoints) {
-      icd_names_t <- paste0("ICD", 1:n_icd, "_t", t)
-      atc_names_t <- paste0("ATC", 1:n_atc, "_t", t)
-      rowvals <- c(df$age[i], df$sex[i], as.numeric(static_mat[i,]),
-                   as.numeric(df[i, icd_names_t]),
-                   as.numeric(df[i, atc_names_t]))
-      arr[i, t, ] <- rowvals
+      
+      icd_vec <- as.numeric(df[i, paste0("ICD", 1:n_icd, "_t", t)])
+      atc_vec <- as.numeric(df[i, paste0("ATC", 1:n_atc, "_t", t)])
+      static_vec <- c(df$age[i], df$sex[i], df$chronic_flag[i], as.numeric(static_mat[i,]))
+      
+      arr[i, t, ] <- c(static_vec, icd_vec, atc_vec)
     }
   }
   
-  feature_names <- c(static_names, paste0("ICD",1:n_icd), paste0("ATC",1:n_atc))
-  dimnames(arr) <- list(paste0("pat",1:n_patients), paste0("t",1:n_timepoints), feature_names)
+  dimnames(arr)[[3]] <- c(static_names, paste0("ICD",1:n_icd), paste0("ATC",1:n_atc))
   
   return(arr)
-  
 }
 
- 
-wide0 <- wide
+
+x_array <- make_rnn_array_from_wide(wide, n_timepoints, n_icd, n_atc)
 
 
-x_array0 <- make_rnn_array_from_wide(wide0, n_timepoints, n_icd, n_atc)
-dim(x_array0)  # check
+#...............................................................................
+## Train/Validation split ####
+#...............................................................................
 
-
-
-
-## Train/Test split by patient ####
 set.seed(42)
-n <- dim(x_array0)[1]
-train_idx <- sample(seq_len(n), size = round(0.8*n))
-x_train <- x_array0[train_idx,,,drop=FALSE]
-y_train <- wide0$outcome[train_idx]
-x_val <- x_array0[-train_idx,,,drop=FALSE]
-y_val <- wide0$outcome[-train_idx]
+idx <- sample(seq_len(n_patients), 0.8*n_patients)
 
-# Normalize static continuous (age) globally using train mean/sd
-age_mean <- mean(x_train[,, "age"])
-age_sd   <- sd(x_train[,, "age"])
-x_train[,, "age"] <- (x_train[,, "age"] - age_mean)/age_sd
-x_val[,, "age"]   <- (x_val[,, "age"] - age_mean)/age_sd
+x_train <- x_array[idx,,,drop=FALSE]
+x_val   <- x_array[-idx,,,drop=FALSE]
+y_train <- wide$outcome[idx]
+y_val   <- wide$outcome[-idx]
 
 
-
-
-
-## Baseline logistic on aggregated features ####
-
-# aggregate: total causal ICD & ATC exposures 
-agg_features <- function(x_array) {
-  
-  n_pat <- dim(x_array)[1]
-  n_time <- dim(x_array)[2]
-  
-  # columns names from dimnames:
-  fnames <- dimnames(x_array)[[3]]
-  icd_idx <- which(grepl("^ICD", fnames))
-  atc_idx <- which(grepl("^ATC", fnames))
-  
-  # total exposure
-  total_icd <- apply(x_array[,, icd_idx, drop=FALSE], 1, sum)
-  total_atc <- apply(x_array[,, atc_idx, drop=FALSE], 1, sum)
-  
-  # static
-  age_vec <- x_array[,1,"age"]
-  sex_vec <- x_array[,1,"sex"]
-  cbind(age = age_vec, sex = sex_vec, total_icd = total_icd, total_atc = total_atc)
-}
-
-X_train_agg <- agg_features(x_train)
-X_val_agg   <- agg_features(x_val)
-glm_base <- glm(y_train ~ ., data = as.data.frame(X_train_agg), family = binomial)
-summary(glm_base)
-pred_glm <- predict(glm_base, as.data.frame(X_val_agg), type = "response")
-roc_glm <- roc(y_val, pred_glm); auc_glm <- as.numeric(roc_glm$auc)
-cat("Baseline logistic AUC:", round(auc_glm,3), "\n")
-
-
-
-
-n_timesteps <- dim(x_train)[2]
 n_features <- dim(x_train)[3]
 
 
 
-## --- LSTM model ---
-model_lstm <- keras_model_sequential() %>%
-  layer_lstm(units = 16, input_shape = c(n_timepoints, n_features), activation = "tanh") %>%
-  layer_dense(units = 8, activation = "relu") %>%
-  layer_dense(units = 1, activation = "sigmoid")
 
+
+#...............................................................................
+# Sanity checks ####
+#...............................................................................
+
+
+## Sparsity ####
+total_elements <- prod(dim(x_array))
+non_zero_elements <- sum(x_array != 0)
+sparsity <- 1 - non_zero_elements / total_elements
+cat("Overall sparsity:", round(sparsity*100,2), "%\n")
+
+
+## Check outcome prevalence ####
+mean(wide$outcome)
+summary(prob)
+
+
+## Basic arry dimensions ####
+
+dim(x_array)  # should be: n_patients x n_timepoints x n_features
+dimnames(x_array)[[3]]  # feature names
+
+
+## Check a few single patients ####
+
+patient1 <- x_array[1,,]  # all timesteps for patient 1
+patient1_df <- as.data.frame(patient1)
+patient1_df$time <- 1:n_timepoints
+patient1_df
+
+patient5 <- x_array[5,,]  # all timesteps for patient 5
+patient5_df <- as.data.frame(patient5)
+patient5_df$time <- 1:n_timepoints
+patient5_df
+
+patient13 <- x_array[13,,]  # all timesteps for patient 13
+patient13_df <- as.data.frame(patient13)
+patient13_df$time <- 1:n_timepoints
+patient13_df
+
+# Q: Is it plausible to have no ICD codes but ATC codes???
+
+
+## Check feature ranges ####
+apply(x_array, 3, function(x) range(x))
+
+
+## Check aggregated sums of ICD and ATC codes ####
+
+# Check that the simulated persistent/chronic patterns behave as intended
+rowSums(x_array[1, , grep("^ICD", dimnames(x_array)[[3]])])
+rowSums(x_array[1, , grep("^ATC", dimnames(x_array)[[3]])])
+
+
+## Compare array with wide data frame ####
+all(x_array[1,1,"ICD1"] == wide$ICD1_t1[1])  # should be TRUE
+all(x_array[1,2,"ATC3"] == wide$ATC3_t2[1])  # should be TRUE
+
+
+
+## Visual sanity check ####
+# Plot a small heatmap for a few patients
+sample_pat <- x_array[1:5,, grep("^ICD", dimnames(x_array)[[3]])]
+df_plot <- melt(sample_pat)
+colnames(df_plot) <- c("Patient", "Time", "ICD", "Value")
+
+ggplot(df_plot, aes(x=Time, y=ICD, fill=Value)) +
+  geom_tile() +
+  facet_wrap(~Patient) +
+  scale_fill_gradient(low="white", high="blue") +
+  theme_minimal()
+
+
+
+
+#...............................................................................
+# Models ####
+#...............................................................................
+
+
+#...............................................................................
+## Baseline logistic on aggregated features ####
+#...............................................................................
+
+# Aggregate ICD & ATC codes
+wide$sum_icd <- rowSums(wide[, grep("^ICD", names(wide))])
+wide$sum_atc <- rowSums(wide[, grep("^ATC", names(wide))])
+
+# Filter variables
+wide_glm <- wide %>% 
+  select(age, sex, ses, outcome, sum_icd, sum_atc)
+
+
+# Split into train/validation
+set.seed(42)
+train_indices <- sample(1:nrow(wide_glm), size = round(0.8 * nrow(wide_glm)))
+wide_glm_train <- wide_glm[train_indices, ]
+wide_glm_val <- wide_glm[-train_indices, ]
+
+
+# Fit baseline logistic regression
+glm_base <- glm(outcome ~ ., data = wide_glm_train, family = binomial)
+summary(glm_base)
+
+
+# Predict on training set
+pred_train <- predict(glm_base, newdata = wide_glm_train, type = "response")
+
+# Predict on validation set
+pred_val <- predict(glm_base, newdata = wide_glm_val, type = "response")
+
+# Compute AUC for training set
+roc_train <- roc(wide_glm_train$outcome, pred_train)
+auc_train <- as.numeric(roc_train$auc)
+cat("Training AUC:", round(auc_train, 3), "\n")
+
+# Compute AUC for validation set
+roc_val <- roc(wide_glm_val$outcome, pred_val)
+auc_val <- as.numeric(roc_val$auc)
+cat("Validation AUC:", round(auc_val, 3), "\n")
+
+
+
+# Visualize ROC curves
+plot(roc_val, col="blue", main="ROC Curve - Validation")
+plot(roc_train, col="red", add=TRUE)
+legend("bottomright", legend=c("Train", "Validation"), col=c("red","blue"), lwd=2)
+
+
+
+
+
+#...............................................................................
+## LSTM model ####
+#...............................................................................
+
+## Normalize age
+mu <- mean(x_train[,,"age"])
+sdv <- sd(x_train[,,"age"])
+x_train[,,"age"] <- (x_train[,,"age"] - mu)/sdv
+x_val[,,"age"]   <- (x_val[,,"age"] - mu)/sdv
+
+
+
+# Build model architecture
+model_lstm <- keras_model_sequential() %>%
+  layer_lstm(
+    units = 30,
+    input_shape = c(n_timepoints, n_features),
+    dropout = 0.2,
+    recurrent_dropout = 0.2
+  ) %>%
+  layer_dense(1, activation = "sigmoid")
+
+# Compile model
 model_lstm %>% compile(
   optimizer = "adam",
   loss = "binary_crossentropy",
-  metrics = "accuracy"
+  metrics = list(metric_auc(name="auc"), "accuracy")
 )
 
+# Train model
 history_lstm <- model_lstm %>% fit(
   x_train, y_train,
-  epochs = 20,
-  batch_size = 16,
-  validation_split = 0.2,
+  validation_data = list(x_val, y_val),
+  epochs = 30,
+  batch_size = 64,
+  callbacks = list(
+    callback_early_stopping(
+      monitor = "val_auc",
+      mode = "max",
+      patience = 5,
+      restore_best_weights = TRUE
+    )
+  ),
   verbose = 1
 )
 
-## --- GRU model ---
-model_gru <- keras_model_sequential() %>%
-  layer_gru(units = 16, input_shape = c(n_timepoints, n_features), activation = "tanh") %>%
-  layer_dense(units = 8, activation = "relu") %>%
-  layer_dense(units = 1, activation = "sigmoid")
+history_lstm$metrics$auc
+history_lstm$metrics$val_auc
 
+history_lstm$metrics$accuracy
+history_lstm$metrics$val_accuracy
+
+
+
+#...............................................................................
+## GRU model 
+#...............................................................................
+
+# Build model architecture
+model_gru <- keras_model_sequential() %>%
+  layer_gru(
+    units = 30,
+    input_shape = c(n_timepoints, n_features),
+    dropout = 0.2,
+    recurrent_dropout = 0.2
+  ) %>%
+  layer_dense(1, activation = "sigmoid")
+
+# Compile model
 model_gru %>% compile(
   optimizer = "adam",
   loss = "binary_crossentropy",
-  metrics = "accuracy"
+  metrics = list(metric_auc(name="auc"), "accuracy")
 )
 
 history_gru <- model_gru %>% fit(
   x_train, y_train,
-  epochs = 20,
-  batch_size = 16,
-  validation_split = 0.2,
+  validation_data = list(x_val, y_val),
+  epochs = 30,
+  batch_size = 64,
+  callbacks = list(
+    callback_early_stopping(
+      monitor = "val_auc",
+      mode = "max",
+      patience = 5,
+      restore_best_weights = TRUE
+    )
+  ),
   verbose = 1
 )
 
-# Evaluate both
-cat("\nLSTM Performance:\n")
-model_lstm %>% evaluate(x_val, y_val)
+history_gru$metrics$auc
+history_gru$metrics$val_auc
 
-cat("\nGRU Performance:\n")
-model_gru %>% evaluate(x_val, y_val)
-
+history_gru$metrics$accuracy
+history_gru$metrics$val_accuracy
 
 
-# Conmpare Validation Accuracy of LSTM RNN and GRU RNN
+
+
+
+
+
+
+
+# Compare Validation Accuracy of LSTM RNN and GRU RNN
 par(mfrow = c(1, 2))
 
 # LSTM validation accuracy
@@ -391,6 +513,27 @@ par(mfrow = c(1, 1))
 
 
 # IML techniques ####
+
+tfexplain <- reticulate::import("tf_explain")
+
+
+
+## Integrated gradients ####
+
+explainer <- tfexplain$core$integrated_gradients$IntegratedGradients()
+
+# Explain a batch of patients
+ig <- explainer$explain(
+  validation_data = list(x_val, y_val),
+  model = model_lstm,
+  n_steps = 50
+)
+
+
+
+
+
+
 
 ## Agnostic ####
 
