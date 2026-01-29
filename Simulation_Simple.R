@@ -1,5 +1,5 @@
 #===============================================================================
-# LONGITUDINAL EHR SIMULATION FOR XAI BENCHMARKING
+# LONGITUDINAL EHR SIMULATION FOR XAI BENCHMARKING/EVALUATION
 # 
 # Logic: Outcome is driven by 3 specific "Phenotypes"
 # 1. CHRONIC: High frequency of specific codes (Easy for any model)
