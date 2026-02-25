@@ -30,15 +30,12 @@ N_ATC      <- 40 # number of medication codes (ATC)
 CHRONIC_ICDS      <- c(1, 2, 3)
 TRIGGER_ICD       <- 10  # Risk Trigger
 TRIGGER_ATC       <- 5   # Risk Response
-PROT_RISK_ICD     <- 20  # Risk-Neutralization Condition
-PROT_ANTIDOTE_ATC <- 15  # Risk-Neutralization Antidote
-PURE_PROT_ICD     <- 30  # Purely Protective Condition
-PURE_PROT_ATC     <- 25  # Purely Protective Treatment
 ESCALATION_WINDOW <- 3 
 
 #...............................................................................
 # 2. GENERATE LONGITUDINAL DATA ####
 #...............................................................................
+
 ICD_arr <- array(0L, dim = c(N_patients, N_visits, N_ICD))
 ATC_arr <- array(0L, dim = c(N_patients, N_visits, N_ATC))
 
@@ -50,8 +47,7 @@ for (i in 1:N_patients) {
   }
 }
 
-# 2.2 Targeted Injection of Patterns
-# Scenario A: Sequential Risk Trigger (15%)
+# 2.2 Targeted Injection of Patterns (15%)
 trigger_ids <- sample(1:N_patients, size = N_patients * 0.15)
 for(i in trigger_ids) {
   t_idx <- sample(1:10, 1)
@@ -59,27 +55,24 @@ for(i in trigger_ids) {
   ATC_arr[i, t_idx + 1, TRIGGER_ATC] <- 1
 }
 
-# # Scenario B: Risk-Neutralization (10% total: 5% Risk only, 5% Risk + Antidote)
-# neutral_ids <- sample(setdiff(1:N_patients, trigger_ids), size = N_patients * 0.10)
-# antidote_ids <- neutral_ids[1:(length(neutral_ids)/2)] # Half get the cure
-# 
-# for(i in neutral_ids) {
-#   t_idx <- sample(5:10, 1)
-#   ICD_arr[i, t_idx, PROT_RISK_ICD] <- 1 # Everyone in this group gets the risk
-#   if(i %in% antidote_ids) {
-#     ATC_arr[i, t_idx + 1, PROT_ANTIDOTE_ATC] <- 1 # Only half get the antidote
-#   }
-# }
 
-# Scenario C: Purely Protective Sequence (10%)
-# pure_prot_ids <- sample(setdiff(1:N_patients, c(trigger_ids, neutral_ids)), size = N_patients * 0.10)
-# for(i in pure_prot_ids) {
-#   t_idx <- sample(1:15, 1)
-#   ICD_arr[i, t_idx, PURE_PROT_ICD] <- 1
-#   ATC_arr[i, t_idx + 1, PURE_PROT_ATC] <- 1
-# }
+# 2.3 Late escalation injection (10%)
+escalation_ids <- sample(1:N_patients, size = N_patients * 0.10)
 
-# 2.3 Static & Lab Trend (Keep your existing logic)
+# (Keep escalation separate from trigger to avoid shortcut learning)
+# escalation_ids <- sample(setdiff(1:N_patients, trigger_ids), size = N_patients * 0.10)
+
+late_idx <- (N_visits - ESCALATION_WINDOW + 1):N_visits
+
+for (i in escalation_ids) {
+  for (t in late_idx) {
+    # Increase ICD event rate in the last visits to create a "spike"
+    ICD_arr[i, t, ] <- pmax(ICD_arr[i, t, ], rbinom(N_ICD, 1, 0.08))  # tune 0.05–0.12
+  }
+}
+
+
+# 2.3 Static & Lab Trend
 static_bin  <- rbinom(N_patients, 1, 0.5)
 static_cont <- runif(N_patients, 18, 90) / 90
 lab_values  <- array(0, dim = c(N_patients, N_visits))
@@ -94,19 +87,18 @@ for(i in 1:N_patients) {
 #...............................................................................
 phenotype_contributions <- data.frame(
   patient_id = 1:N_patients, chronic_val = 0, trigger_val = 0,
-  escalation_val = 0, static_val = 0, trend_val = 0,
-  neutralization_val = 0#, pure_protective_val = 0
+  escalation_val = 0, static_val = 0, trend_val = 0
 )
 
 truth_map_icd <- array(0, dim = c(N_patients, N_visits, N_ICD))
 truth_map_atc <- array(0, dim = c(N_patients, N_visits, N_ATC))
 
 for (i in 1:N_patients) {
-  # 1. Chronic Logic (Same)
+  # 1. Chronic Logic
   phenotype_contributions$chronic_val[i] <- sum(colSums(ICD_arr[i, , CHRONIC_ICDS, drop=FALSE])) * 0.5
   truth_map_icd[i, , CHRONIC_ICDS] <- ICD_arr[i, , CHRONIC_ICDS] * 0.25
   
-  # 2. Trigger Logic (Same)
+  # 2. Trigger Logic
   t_icd <- which(ICD_arr[i, , TRIGGER_ICD] == 1)
   t_atc <- which(ATC_arr[i, , TRIGGER_ATC] == 1)
   if(length(t_icd) > 0 && any(t_atc > min(t_icd) & t_atc <= (min(t_icd) + 2))) {
@@ -115,29 +107,7 @@ for (i in 1:N_patients) {
     truth_map_atc[i, t_atc[t_atc > min(t_icd)], TRIGGER_ATC] <- 1.0
   }
   
-  # # 3. Risk-Neutralization (Antidote)
-  # t_risk_icd <- which(ICD_arr[i, , PROT_RISK_ICD] == 1)
-  # t_anti_atc <- which(ATC_arr[i, , PROT_ANTIDOTE_ATC] == 1)
-  # if(length(t_risk_icd) > 0) {
-  #   phenotype_contributions$neutralization_val[i] <- 5.0 # Initial Risk
-  #   truth_map_icd[i, t_risk_icd, PROT_RISK_ICD] <- 0.5
-  #   # Antidote check
-  #   if(any(t_anti_atc > min(t_risk_icd) & t_anti_atc <= (min(t_risk_icd) + 2))) {
-  #     phenotype_contributions$neutralization_val[i] <- -2.0 # Flips to Protective
-  #     truth_map_atc[i, t_anti_atc[t_anti_atc > min(t_risk_icd)], PROT_ANTIDOTE_ATC] <- -1.0 # BLUE
-  #   }
-  # }
-  
-  # # 4. Purely Protective Sequence
-  # t_p_icd <- which(ICD_arr[i, , PURE_PROT_ICD] == 1)
-  # t_p_atc <- which(ATC_arr[i, , PURE_PROT_ATC] == 1)
-  # if(length(t_p_icd) > 0 && any(t_p_atc > min(t_p_icd) & t_p_atc <= (min(t_p_icd) + 2))) {
-  #   phenotype_contributions$pure_protective_val[i] <- -5.0
-  #   truth_map_icd[i, t_p_icd, PURE_PROT_ICD] <- -0.5 # BLUE
-  #   truth_map_atc[i, t_p_atc[t_p_atc > min(t_p_icd)], PURE_PROT_ATC] <- -0.5 # BLUE
-  # }
-  
-  # 5. Escalation, Static, and Trend
+  # 3. Escalation, Static, and Trend
   late_idx <- (N_visits - ESCALATION_WINDOW + 1):N_visits
   if(sum(ICD_arr[i, late_idx, ]) > (sum(ICD_arr[i, 1:(N_visits-3), ])/17 + 2)) {
     phenotype_contributions$escalation_val[i] <- 2.5
@@ -156,6 +126,9 @@ find_intercept <- function(intercept) mean(1 / (1 + exp(-(intercept + total_risk
 calibrated_intercept <- uniroot(find_intercept, interval = c(-50, 10))$root
 final_probs <- 1 / (1 + exp(-(calibrated_intercept + total_risk_signal)))
 outcomes <- rbinom(N_patients, 1, final_probs)
+
+
+
 
 
 #...............................................................................
@@ -202,6 +175,8 @@ write.csv(melt(lab_values, varnames = c("patient_id", "time")),
           "lab_data.csv", 
           row.names = FALSE)
 
+
+
 #........................ 5.3 Ground Truth (for XAI validation) ................
 
 saveRDS(list(truth_icd = truth_map_icd, truth_atc = truth_map_atc, outcomes = outcomes), 
@@ -213,4 +188,28 @@ saveRDS(list(truth_icd = truth_map_icd, truth_atc = truth_map_atc, outcomes = ou
 cat("Simulation Complete. Prevalence:", mean(outcomes), "\n")
 
 
+#......................... 5.4 Ground-truth phenotype flags ....................
+
+# Ground-truth phenotype flags from the SAME scoring you use
+phenotype_labels_gt <- data.frame(
+  patient_id = 1:N_patients,
+  has_trigger_gt = phenotype_contributions$trigger_val > 0,
+  has_escalation_gt = phenotype_contributions$escalation_val > 0,
+  chronic_count = apply(ICD_arr[,,CHRONIC_ICDS, drop=FALSE], 1, sum)
+)
+
+# choose threshold for "chronic"
+phenotype_labels_gt$has_chronic_gt <- phenotype_contributions$chronic_val > 0
+# or: >= 1.0, >= 2.0 depending how “pure” you want
+
+phenotype_labels_gt$group_gt <- with(phenotype_labels_gt,
+                                     ifelse(has_trigger_gt & has_escalation_gt & has_chronic_gt, "all_three",
+                                            ifelse(has_trigger_gt & has_escalation_gt, "trigger+escalation",
+                                                   ifelse(has_trigger_gt & has_chronic_gt, "trigger+chronic",
+                                                          ifelse(has_escalation_gt & has_chronic_gt, "escalation+chronic",
+                                                                 ifelse(has_trigger_gt, "trigger_only",
+                                                                        ifelse(has_escalation_gt, "escalation_only",
+                                                                               ifelse(has_chronic_gt, "chronic_only", "none"))))))))
+
+write.csv(phenotype_labels_gt, "phenotype_labels_gt.csv", row.names = FALSE)
 
