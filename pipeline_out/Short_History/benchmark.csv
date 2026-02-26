@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+Short History,GRU,0.8991,0.8197,0.0794
+Short History,LSTM,0.9165,0.8167,0.0998
+Short History,Random Forest,0.9434,0.8,0.1434
+Short History,Logistic Regression,0.9921,0.7637,0.2283

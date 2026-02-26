@@ -1,0 +1,49 @@
+phenotype,metric,value,method,n_patients
+trigger,spearman_r,0.0002,EG_GRU,90
+trigger,topk_feature_hit (k=10),0.0778,EG_GRU,90
+trigger,temporal_precision,0.0,EG_GRU,90
+escalation,spearman_r,0.0016,EG_GRU,124
+escalation,topk_feature_hit (k=10),1.0,EG_GRU,124
+escalation,temporal_precision,0.7706,EG_GRU,124
+chronic,spearman_r,0.0006,EG_GRU,479
+chronic,topk_feature_hit (k=10),0.263,EG_GRU,479
+chronic,temporal_precision,1.0,EG_GRU,479
+all_three,spearman_r,0.0059,EG_GRU,21
+all_three,topk_feature_hit (k=10),0.0476,EG_GRU,21
+all_three,temporal_precision,0.0,EG_GRU,21
+trigger,spearman_r,0.0009,EG_LSTM,90
+trigger,topk_feature_hit (k=10),0.0333,EG_LSTM,90
+trigger,temporal_precision,0.0001,EG_LSTM,90
+escalation,spearman_r,0.0011,EG_LSTM,124
+escalation,topk_feature_hit (k=10),1.0,EG_LSTM,124
+escalation,temporal_precision,0.6046,EG_LSTM,124
+chronic,spearman_r,0.001,EG_LSTM,479
+chronic,topk_feature_hit (k=10),0.3862,EG_LSTM,479
+chronic,temporal_precision,1.0,EG_LSTM,479
+all_three,spearman_r,0.0041,EG_LSTM,21
+all_three,topk_feature_hit (k=10),0.0,EG_LSTM,21
+all_three,temporal_precision,0.0001,EG_LSTM,21
+trigger,spearman_r,,IG_GRU,90
+trigger,topk_feature_hit (k=10),0.0,IG_GRU,90
+trigger,temporal_precision,,IG_GRU,90
+escalation,spearman_r,,IG_GRU,124
+escalation,topk_feature_hit (k=10),1.0,IG_GRU,124
+escalation,temporal_precision,,IG_GRU,124
+chronic,spearman_r,,IG_GRU,479
+chronic,topk_feature_hit (k=10),1.0,IG_GRU,479
+chronic,temporal_precision,,IG_GRU,479
+all_three,spearman_r,,IG_GRU,21
+all_three,topk_feature_hit (k=10),0.0,IG_GRU,21
+all_three,temporal_precision,,IG_GRU,21
+trigger,spearman_r,-0.0005,IG_LSTM,90
+trigger,topk_feature_hit (k=10),0.0,IG_LSTM,90
+trigger,temporal_precision,0.0001,IG_LSTM,90
+escalation,spearman_r,0.001,IG_LSTM,124
+escalation,topk_feature_hit (k=10),1.0,IG_LSTM,124
+escalation,temporal_precision,0.7737,IG_LSTM,124
+chronic,spearman_r,-0.0001,IG_LSTM,479
+chronic,topk_feature_hit (k=10),1.0,IG_LSTM,479
+chronic,temporal_precision,1.0,IG_LSTM,479
+all_three,spearman_r,0.003,IG_LSTM,21
+all_three,topk_feature_hit (k=10),0.0,IG_LSTM,21
+all_three,temporal_precision,0.0001,IG_LSTM,21

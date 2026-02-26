@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+High Noise,GRU,0.9975,0.7318,0.2658
+High Noise,LSTM,0.8811,0.7006,0.1805
+High Noise,Random Forest,0.9999,0.6626,0.3373
+High Noise,Logistic Regression,1.0,0.6113,0.3887

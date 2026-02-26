@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+Stress Test,GRU,0.8777,0.6551,0.2225
+Stress Test,LSTM,0.7743,0.6345,0.1397
+Stress Test,Random Forest,0.9993,0.5898,0.4094
+Stress Test,Logistic Regression,1.0,0.5703,0.4297

@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+Large N,LSTM,0.8696,0.8374,0.0322
+Large N,GRU,0.8828,0.8326,0.0503
+Large N,Random Forest,0.8922,0.8049,0.0873
+Large N,Logistic Regression,0.963,0.7494,0.2136

@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+Baseline,GRU,0.9091,0.8224,0.0866
+Baseline,LSTM,0.9002,0.8163,0.0839
+Baseline,Random Forest,0.9564,0.8152,0.1412
+Baseline,Logistic Regression,1.0,0.7137,0.2863

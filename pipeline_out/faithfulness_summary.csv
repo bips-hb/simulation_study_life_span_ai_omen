@@ -1,0 +1,12 @@
+method,EG_GRU,EG_GRU,EG_GRU,EG_LSTM,EG_LSTM,EG_LSTM,IG_GRU,IG_GRU,IG_GRU,IG_LSTM,IG_LSTM,IG_LSTM
+metric,spearman_r,temporal_precision,topk_feature_hit (k=10),spearman_r,temporal_precision,topk_feature_hit (k=10),spearman_r,temporal_precision,topk_feature_hit (k=10),spearman_r,temporal_precision,topk_feature_hit (k=10)
+Baseline,,,,,,,,,,,,
+Small N,,,,,,,,,,,,
+Large N,,,,,,,,,,,,
+Rare Trigger,,,,,,,,,,,,
+Very Rare Trigger,,,,,,,,,,,,
+Short History,,,,,,,,,,,,
+Long History,,,,,,,,,,,,
+High Noise,,,,,,,,,,,,
+Very High Noise,,,,,,,,,,,,
+Stress Test,,,,,,,,,,,,

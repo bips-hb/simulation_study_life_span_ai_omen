@@ -1,0 +1,5 @@
+Scenario,Model,Train AUC,Test AUC,Gap
+Very Rare Trigger,LSTM,0.7512,0.6899,0.0613
+Very Rare Trigger,GRU,0.7439,0.6808,0.0631
+Very Rare Trigger,Random Forest,0.9092,0.6344,0.2747
+Very Rare Trigger,Logistic Regression,1.0,0.5675,0.4325
